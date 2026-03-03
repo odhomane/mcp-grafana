@@ -77,21 +77,7 @@ func (c *alertingClient) makeRequest(ctx context.Context, path string) (*http.Re
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 
-	// If accessToken is set we use that first and fall back to normal Authorization.
-	if c.accessToken != "" && c.idToken != "" {
-		req.Header.Set("X-Access-Token", c.accessToken)
-		req.Header.Set("X-Grafana-Id", c.idToken)
-	} else if c.apiKey != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
-	} else if c.basicAuth != nil {
-		password, _ := c.basicAuth.Password()
-		req.SetBasicAuth(c.basicAuth.Username(), password)
-	}
-
-	// Add org ID header for multi-org support
-	if c.orgID > 0 {
-		req.Header.Set(client.OrgIDHeader, strconv.FormatInt(c.orgID, 10))
-	}
+	c.setAuthHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -104,6 +90,81 @@ func (c *alertingClient) makeRequest(ctx context.Context, path string) (*http.Re
 	}
 
 	return resp, nil
+}
+
+func (c *alertingClient) setAuthHeaders(req *http.Request) {
+	// If accessToken is set we use that first and fall back to normal Authorization.
+	if c.accessToken != "" && c.idToken != "" {
+		req.Header.Set("X-Access-Token", c.accessToken)
+		req.Header.Set("X-Grafana-Id", c.idToken)
+	} else if c.apiKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+	} else if c.basicAuth != nil {
+		password, _ := c.basicAuth.Password()
+		req.SetBasicAuth(c.basicAuth.Username(), password)
+	}
+
+	// Add org ID header for multi-org support.
+	if c.orgID > 0 {
+		req.Header.Set(client.OrgIDHeader, strconv.FormatInt(c.orgID, 10))
+	}
+}
+
+func (c *alertingClient) makeJSONRequest(
+	ctx context.Context,
+	method string,
+	path string,
+	query url.Values,
+	requestBody any,
+	expectedStatusCodes ...int,
+) ([]byte, error) {
+	endpoint := c.baseURL.JoinPath(path)
+	if len(query) > 0 {
+		endpoint.RawQuery = query.Encode()
+	}
+
+	var bodyReader io.Reader
+	if requestBody != nil {
+		payload, err := json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		bodyReader = strings.NewReader(string(payload))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint.String(), bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request to %s: %w", endpoint.String(), err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request to %s: %w", endpoint.String(), err)
+	}
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck
+	}()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body from %s: %w", endpoint.String(), err)
+	}
+
+	if len(expectedStatusCodes) == 0 {
+		expectedStatusCodes = []int{http.StatusOK}
+	}
+
+	for _, expectedStatusCode := range expectedStatusCodes {
+		if resp.StatusCode == expectedStatusCode {
+			return responseBody, nil
+		}
+	}
+
+	return nil, fmt.Errorf("grafana API returned status code %d: %s", resp.StatusCode, string(responseBody))
 }
 
 func (c *alertingClient) GetRules(ctx context.Context) (*rulesResponse, error) {
@@ -266,4 +327,115 @@ func (c *alertingClient) GetAlertmanagerConfig(ctx context.Context, datasourceUI
 	}
 
 	return &cfg, nil
+}
+
+type alertmanagerMatcher struct {
+	Name    string `json:"name"`
+	Value   string `json:"value"`
+	IsRegex bool   `json:"isRegex"`
+	IsEqual bool   `json:"isEqual,omitempty"`
+}
+
+type alertmanagerPostableSilence struct {
+	ID        string                `json:"id,omitempty"`
+	Matchers  []alertmanagerMatcher `json:"matchers"`
+	StartsAt  string                `json:"startsAt"`
+	EndsAt    string                `json:"endsAt"`
+	CreatedBy string                `json:"createdBy"`
+	Comment   string                `json:"comment"`
+}
+
+type alertmanagerSilenceStatus struct {
+	State string `json:"state,omitempty"`
+}
+
+type alertmanagerGettableSilence struct {
+	ID        string                     `json:"id"`
+	Matchers  []alertmanagerMatcher      `json:"matchers"`
+	StartsAt  string                     `json:"startsAt"`
+	EndsAt    string                     `json:"endsAt"`
+	UpdatedAt string                     `json:"updatedAt,omitempty"`
+	CreatedBy string                     `json:"createdBy"`
+	Comment   string                     `json:"comment"`
+	Status    *alertmanagerSilenceStatus `json:"status,omitempty"`
+}
+
+type createSilenceResponse struct {
+	SilenceID string `json:"silenceID,omitempty"`
+	SilenceId string `json:"silenceId,omitempty"`
+}
+
+func (c *alertingClient) getAlertmanagerV2Path(datasourceUID *string, suffix string) string {
+	if datasourceUID != nil && *datasourceUID != "" {
+		return fmt.Sprintf("/api/datasources/proxy/uid/%s/api/v2%s", *datasourceUID, suffix)
+	}
+	return fmt.Sprintf("/api/alertmanager/grafana/api/v2%s", suffix)
+}
+
+func (c *alertingClient) ListSilences(ctx context.Context, datasourceUID *string, filters []string) ([]alertmanagerGettableSilence, error) {
+	query := url.Values{}
+	for _, filter := range filters {
+		if strings.TrimSpace(filter) != "" {
+			query.Add("filter", filter)
+		}
+	}
+
+	path := c.getAlertmanagerV2Path(datasourceUID, "/silences")
+	body, err := c.makeJSONRequest(ctx, http.MethodGet, path, query, nil, http.StatusOK)
+	if err != nil {
+		return nil, fmt.Errorf("list silences: %w", err)
+	}
+
+	var silences []alertmanagerGettableSilence
+	if err := json.Unmarshal(body, &silences); err != nil {
+		return nil, fmt.Errorf("list silences: failed to decode response: %w", err)
+	}
+
+	return silences, nil
+}
+
+func (c *alertingClient) GetSilence(ctx context.Context, datasourceUID *string, silenceID string) (*alertmanagerGettableSilence, error) {
+	path := c.getAlertmanagerV2Path(datasourceUID, fmt.Sprintf("/silence/%s", url.PathEscape(silenceID)))
+	body, err := c.makeJSONRequest(ctx, http.MethodGet, path, nil, nil, http.StatusOK)
+	if err != nil {
+		return nil, fmt.Errorf("get silence: %w", err)
+	}
+
+	var silence alertmanagerGettableSilence
+	if err := json.Unmarshal(body, &silence); err != nil {
+		return nil, fmt.Errorf("get silence: failed to decode response: %w", err)
+	}
+
+	return &silence, nil
+}
+
+func (c *alertingClient) CreateSilence(ctx context.Context, datasourceUID *string, silence alertmanagerPostableSilence) (string, error) {
+	path := c.getAlertmanagerV2Path(datasourceUID, "/silences")
+	body, err := c.makeJSONRequest(ctx, http.MethodPost, path, nil, silence, http.StatusOK)
+	if err != nil {
+		return "", fmt.Errorf("create silence: %w", err)
+	}
+
+	var created createSilenceResponse
+	if err := json.Unmarshal(body, &created); err != nil {
+		return "", fmt.Errorf("create silence: failed to decode response: %w", err)
+	}
+
+	if created.SilenceID != "" {
+		return created.SilenceID, nil
+	}
+	if created.SilenceId != "" {
+		return created.SilenceId, nil
+	}
+
+	return "", fmt.Errorf("create silence: response did not include silenceID")
+}
+
+func (c *alertingClient) DeleteSilence(ctx context.Context, datasourceUID *string, silenceID string) error {
+	path := c.getAlertmanagerV2Path(datasourceUID, fmt.Sprintf("/silence/%s", url.PathEscape(silenceID)))
+	_, err := c.makeJSONRequest(ctx, http.MethodDelete, path, nil, nil, http.StatusOK, http.StatusAccepted, http.StatusNoContent)
+	if err != nil {
+		return fmt.Errorf("delete silence: %w", err)
+	}
+	return nil
 }

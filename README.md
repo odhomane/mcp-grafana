@@ -132,7 +132,10 @@ The dashboard tools now include several strategies to manage context window usag
 - **List and fetch alert rule information:** View alert rules and their statuses (firing/normal/error/etc.) in Grafana. Supports both Grafana-managed rules and datasource-managed rules from Prometheus or Loki datasources.
 - **Create and update alert rules:** Create new alert rules or modify existing ones.
 - **Delete alert rules:** Remove alert rules by UID.
+- **Manage silences:** List, inspect, create/update, and delete Alertmanager silences for Grafana-managed Alertmanager or an Alertmanager datasource.
 - **List contact points:** View configured notification contact points in Grafana. Supports both Grafana-managed contact points and receivers from external Alertmanager datasources (Prometheus Alertmanager, Mimir, Cortex).
+- **Manage contact points:** Fetch, create, update, and delete Grafana-managed contact points.
+- **Manage notification policies:** Read, update, and reset the notification policy tree.
 
 ### Grafana OnCall
 
@@ -294,7 +297,18 @@ Scopes define the specific resources that permissions apply to. Each action requ
 | `create_alert_rule`               | Alerting    | Create a new alert rule                                             | `alert.rules:write`                     | `folders:*` or `folders:uid:alerts-folder`          |
 | `update_alert_rule`               | Alerting    | Update an existing alert rule                                       | `alert.rules:write`                     | `folders:uid:alerts-folder`                         |
 | `delete_alert_rule`               | Alerting    | Delete an alert rule by UID                                         | `alert.rules:write`                     | `folders:uid:alerts-folder`                         |
+| `list_silences`                   | Alerting    | List Alertmanager silences                                           | `alert.instances:read`                  | Global scope or alertmanager datasource scope       |
+| `get_silence`                     | Alerting    | Get a specific Alertmanager silence                                  | `alert.instances:read`                  | Global scope or alertmanager datasource scope       |
+| `create_silence`                  | Alerting    | Create or update an Alertmanager silence                             | `alert.instances:write`                 | Global scope or alertmanager datasource scope       |
+| `delete_silence`                  | Alerting    | Delete (expire) an Alertmanager silence by ID                        | `alert.instances:write`                 | Global scope or alertmanager datasource scope       |
 | `list_contact_points`             | Alerting    | List notification contact points (Grafana-managed and Alertmanager) | `alert.notifications:read`              | Global scope                                        |
+| `get_contact_point`               | Alerting    | Get a Grafana-managed contact point by UID                           | `alert.notifications:read`              | Global scope                                        |
+| `create_contact_point`            | Alerting    | Create a Grafana-managed contact point                               | `alert.notifications:write`             | Global scope                                        |
+| `update_contact_point`            | Alerting    | Update a Grafana-managed contact point                               | `alert.notifications:write`             | Global scope                                        |
+| `delete_contact_point`            | Alerting    | Delete a Grafana-managed contact point                               | `alert.notifications:write`             | Global scope                                        |
+| `get_notification_policy`         | Alerting    | Get the notification policy tree                                     | `alert.notifications:read`              | Global scope                                        |
+| `update_notification_policy`      | Alerting    | Replace the notification policy tree                                 | `alert.notifications:write`             | Global scope                                        |
+| `reset_notification_policy`       | Alerting    | Reset notification policy tree to defaults                           | `alert.notifications:write`             | Global scope                                        |
 | `list_oncall_schedules`           | OnCall      | List schedules from Grafana OnCall                                  | `grafana-oncall-app.schedules:read`     | Plugin-specific scopes                              |
 | `get_oncall_shift`                | OnCall      | Get details for a specific OnCall shift                             | `grafana-oncall-app.schedules:read`     | Plugin-specific scopes                              |
 | `get_current_oncall_users`        | OnCall      | Get users currently on-call for a specific schedule                 | `grafana-oncall-app.schedules:read`     | Plugin-specific scopes                              |

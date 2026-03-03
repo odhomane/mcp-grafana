@@ -833,10 +833,21 @@ var DeleteAlertRule = mcpgrafana.MustTool(
 func AddAlertingTools(mcp *server.MCPServer, enableWriteTools bool) {
 	ListAlertRules.Register(mcp)
 	GetAlertRuleByUID.Register(mcp)
+	ListSilences.Register(mcp)
+	GetSilence.Register(mcp)
+	GetNotificationPolicy.Register(mcp)
+	GetContactPoint.Register(mcp)
 	if enableWriteTools {
 		CreateAlertRule.Register(mcp)
 		UpdateAlertRule.Register(mcp)
 		DeleteAlertRule.Register(mcp)
+		CreateSilence.Register(mcp)
+		DeleteSilence.Register(mcp)
+		UpdateNotificationPolicy.Register(mcp)
+		ResetNotificationPolicy.Register(mcp)
+		CreateContactPoint.Register(mcp)
+		UpdateContactPoint.Register(mcp)
+		DeleteContactPoint.Register(mcp)
 	}
 	ListContactPoints.Register(mcp)
 }

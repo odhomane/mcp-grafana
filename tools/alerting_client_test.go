@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -114,4 +115,87 @@ func TestNewAlertingClientFromContext(t *testing.T) {
 	require.Equal(t, "http://localhost:3000", client.baseURL.String())
 	require.Equal(t, "test-api-key", client.apiKey)
 	require.NotNil(t, client.httpClient)
+}
+
+func TestAlertingClient_ListSilences(t *testing.T) {
+	server, client := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/alertmanager/grafana/api/v2/silences", r.URL.Path)
+		require.Equal(t, []string{"customer_id=G002"}, r.URL.Query()["filter"])
+		require.Equal(t, "Bearer test-api-key", r.Header.Get("Authorization"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write([]byte(`[{"id":"sil-1","createdBy":"mcp","comment":"maintenance","startsAt":"2026-03-03T00:00:00Z","endsAt":"2026-03-13T00:00:00Z","matchers":[{"name":"customer_id","value":"G002","isRegex":false,"isEqual":true}],"status":{"state":"active"}}]`))
+		require.NoError(t, err)
+	})
+	defer server.Close()
+
+	silences, err := client.ListSilences(context.Background(), nil, []string{"customer_id=G002"})
+	require.NoError(t, err)
+	require.Len(t, silences, 1)
+	require.Equal(t, "sil-1", silences[0].ID)
+	require.Equal(t, "active", silences[0].Status.State)
+}
+
+func TestAlertingClient_GetCreateDeleteSilence_DatasourceProxy(t *testing.T) {
+	t.Run("get silence", func(t *testing.T) {
+		dsUID := "alertmanager"
+		server, client := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "/api/datasources/proxy/uid/alertmanager/api/v2/silence/sil-1", r.URL.Path)
+			require.Equal(t, "GET", r.Method)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write([]byte(`{"id":"sil-1","createdBy":"mcp","comment":"maintenance","startsAt":"2026-03-03T00:00:00Z","endsAt":"2026-03-13T00:00:00Z","matchers":[{"name":"customer_id","value":"G002","isRegex":false,"isEqual":true}]}`))
+			require.NoError(t, err)
+		})
+		defer server.Close()
+
+		silence, err := client.GetSilence(context.Background(), &dsUID, "sil-1")
+		require.NoError(t, err)
+		require.Equal(t, "sil-1", silence.ID)
+	})
+
+	t.Run("create silence", func(t *testing.T) {
+		dsUID := "alertmanager"
+		server, client := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "/api/datasources/proxy/uid/alertmanager/api/v2/silences", r.URL.Path)
+			require.Equal(t, "POST", r.Method)
+
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.Contains(t, string(body), `"createdBy":"mcp"`)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, err = w.Write([]byte(`{"silenceID":"sil-created"}`))
+			require.NoError(t, err)
+		})
+		defer server.Close()
+
+		silenceID, err := client.CreateSilence(context.Background(), &dsUID, alertmanagerPostableSilence{
+			CreatedBy: "mcp",
+			Comment:   "maintenance",
+			StartsAt:  "2026-03-03T00:00:00Z",
+			EndsAt:    "2026-03-13T00:00:00Z",
+			Matchers: []alertmanagerMatcher{
+				{Name: "customer_id", Value: "G002", IsRegex: false, IsEqual: true},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "sil-created", silenceID)
+	})
+
+	t.Run("delete silence", func(t *testing.T) {
+		dsUID := "alertmanager"
+		server, client := setupMockServer(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "/api/datasources/proxy/uid/alertmanager/api/v2/silence/sil-1", r.URL.Path)
+			require.Equal(t, "DELETE", r.Method)
+			w.WriteHeader(http.StatusOK)
+		})
+		defer server.Close()
+
+		err := client.DeleteSilence(context.Background(), &dsUID, "sil-1")
+		require.NoError(t, err)
+	})
 }
