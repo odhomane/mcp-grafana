@@ -158,8 +158,8 @@ type CreateSilenceParams struct {
 	StartsAt      *string               `json:"startsAt,omitempty" jsonschema:"description=RFC3339 start time. Defaults to now"`
 	EndsAt        *string               `json:"endsAt,omitempty" jsonschema:"description=RFC3339 end time. Required unless duration is provided"`
 	Duration      *string               `json:"duration,omitempty" jsonschema:"description=Duration from start time (e.g. '240h' or '10d'). Required if endsAt is not set"`
-	CreatedBy     string                `json:"createdBy" jsonschema:"required,description=Creator identifier or username"`
-	Comment       string                `json:"comment" jsonschema:"required,description=Human-readable reason for the silence"`
+	CreatedBy     string                `json:"createdBy,omitempty" jsonschema:"description=Creator identifier or username. Defaults to 'mcp-grafana'"`
+	Comment       string                `json:"comment,omitempty" jsonschema:"description=Human-readable reason for the silence. Defaults to auto-generated text"`
 }
 
 func parseSilenceDuration(raw string) (time.Duration, error) {
@@ -179,12 +179,6 @@ func parseSilenceDuration(raw string) (time.Duration, error) {
 func (p CreateSilenceParams) validate() error {
 	if len(p.Matchers) == 0 {
 		return fmt.Errorf("at least one matcher is required")
-	}
-	if strings.TrimSpace(p.CreatedBy) == "" {
-		return fmt.Errorf("createdBy is required")
-	}
-	if strings.TrimSpace(p.Comment) == "" {
-		return fmt.Errorf("comment is required")
 	}
 	if p.EndsAt == nil && p.Duration == nil {
 		return fmt.Errorf("either endsAt or duration is required")
@@ -226,6 +220,7 @@ func createSilence(ctx context.Context, args CreateSilenceParams) (map[string]st
 	}
 
 	matchers := make([]alertmanagerMatcher, 0, len(args.Matchers))
+	matcherSummary := make([]string, 0, len(args.Matchers))
 	for _, m := range args.Matchers {
 		if strings.TrimSpace(m.Name) == "" {
 			return nil, fmt.Errorf("create silence: matcher name is required")
@@ -243,14 +238,36 @@ func createSilence(ctx context.Context, args CreateSilenceParams) (map[string]st
 			IsRegex: m.IsRegex,
 			IsEqual: isEqual,
 		})
+
+		op := "="
+		if !isEqual {
+			op = "!="
+		}
+		if m.IsRegex {
+			op = "=~"
+			if !isEqual {
+				op = "!~"
+			}
+		}
+		matcherSummary = append(matcherSummary, fmt.Sprintf("%s%s%s", m.Name, op, m.Value))
+	}
+
+	createdBy := strings.TrimSpace(args.CreatedBy)
+	if createdBy == "" {
+		createdBy = "mcp-grafana"
+	}
+
+	comment := strings.TrimSpace(args.Comment)
+	if comment == "" {
+		comment = fmt.Sprintf("Silence via MCP for %s", strings.Join(matcherSummary, ", "))
 	}
 
 	payload := alertmanagerPostableSilence{
 		Matchers:  matchers,
 		StartsAt:  startAt.Format(time.RFC3339),
 		EndsAt:    endAt.Format(time.RFC3339),
-		CreatedBy: args.CreatedBy,
-		Comment:   args.Comment,
+		CreatedBy: createdBy,
+		Comment:   comment,
 	}
 	if args.SilenceID != nil && strings.TrimSpace(*args.SilenceID) != "" {
 		payload.ID = strings.TrimSpace(*args.SilenceID)
