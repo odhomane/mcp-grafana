@@ -1,0 +1,45 @@
+name: Sync upstream into custom branch
+
+# Keeps codex/silences-notification-policies current with grafana/mcp-grafana's
+# main branch, so this fork picks up upstream fixes/features/security patches
+# automatically. Only ever merges (never rebases) so this is safe to run
+# unattended - a merge either succeeds cleanly or the workflow fails loudly
+# without touching the branch, it never force-pushes or drops history.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"  # daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: codex/silences-notification-policies
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/grafana/mcp-grafana.git
+          git fetch upstream main
+
+      - name: Merge upstream/main
+        run: |
+          if ! git merge upstream/main --no-edit; then
+            git merge --abort
+            echo "::error::Merging upstream/main into codex/silences-notification-policies produced conflicts. Resolve manually: git fetch upstream main && git merge upstream/main"
+            exit 1
+          fi
+
+      - name: Push
+        run: git push origin codex/silences-notification-policies
